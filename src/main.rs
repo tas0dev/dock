@@ -44,11 +44,8 @@ fn main() {
 
     let pixels = render_dock(width as usize, height as usize);
     if let Err(e) = flush_window_shared(kagami_tid, window_id, width, height, &pixels) {
-        eprintln!("[Dock] shared flush failed: {}, fallback to chunk", e);
-        if let Err(e2) = flush_window_chunked(kagami_tid, window_id, width, height, &pixels) {
-            eprintln!("[Dock] draw failed: {}", e2);
-            return;
-        }
+        eprintln!("[Dock] shared draw failed: {}", e);
+        return;
     }
     println!("[Dock] shown");
 
@@ -189,7 +186,11 @@ fn flush_window_shared(
         return Err("failed to send shared pages");
     }
     wait_shared_attach_ack(kagami_tid, window_id)?;
-    present_shared(kagami_tid, window_id)
+    for _ in 0..3 {
+        present_shared(kagami_tid, window_id)?;
+        yield_now();
+    }
+    Ok(())
 }
 
 fn wait_shared_attach_ack(kagami_tid: u64, window_id: u32) -> Result<(), &'static str> {
@@ -240,8 +241,8 @@ fn render_dock(width: usize, height: usize) -> Vec<u32> {
     let dock_h = 75i32;
     let dock_x = ((width as i32 - dock_w) / 2).max(0);
     let dock_y = (height as i32 - dock_h).max(0);
-    fill_rounded_rect(&mut px, width, dock_x, dock_y, dock_w, dock_h, 22, 0xFFF6_F8FC);
-    stroke_rounded_rect(&mut px, width, dock_x, dock_y, dock_w, dock_h, 22, 0xFFCD_D7E4);
+    fill_rounded_rect(&mut px, width, dock_x, dock_y, dock_w, dock_h, 22, 0x4BF6_F8FC);
+    stroke_rounded_rect(&mut px, width, dock_x, dock_y, dock_w, dock_h, 22, 0x4BCD_D7E4);
 
     let mut icon_x = dock_x + 18;
     let icon_y = dock_y + 18;
@@ -348,7 +349,7 @@ fn blend_put(px: &mut [u32], stride: usize, x: i32, y: i32, src: u32, alpha: u8)
     }
     let idx = y * stride + x;
     let dst = px[idx];
-    let src_a = (((src >> 24) & 0xFF) as u8).saturating_mul(alpha) / 255;
+    let src_a = ((((src >> 24) & 0xFF) * (alpha as u32)) / 255) as u8;
     let src_px = ((src_a as u32) << 24) | (src & 0x00FF_FFFF);
     px[idx] = alpha_over(dst, src_px);
 }
