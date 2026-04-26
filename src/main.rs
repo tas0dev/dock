@@ -1,6 +1,7 @@
 use swiftlib::{
     ipc::{ipc_recv, ipc_send},
     keyboard::{read_scancode, read_scancode_tap},
+    fs, io, process,
     privileged,
     task::{find_process_by_name, yield_now},
 };
@@ -42,7 +43,9 @@ fn main() {
         }
     };
 
-    let pixels = render_dock(width as usize, height as usize);
+    let apps = list_app_bundles();
+    let mut sel = 0usize;
+    let pixels = render_dock_with_apps(width as usize, height as usize, &apps, sel);
     if let Err(e) = flush_window_shared(kagami_tid, window_id, width, height, &pixels) {
         eprintln!("[Dock] shared draw failed: {}", e);
         return;
@@ -55,11 +58,34 @@ fn main() {
             Ok(None) => read_scancode(),
             Err(_) => read_scancode(),
         };
-        if let Some(sc) = sc_opt
-            && (sc == 0x01 || sc == 0x81)
-        {
-            println!("[Dock] exit");
-            return;
+        if let Some(sc) = sc_opt {
+            // ESC
+            if sc == 0x01 || sc == 0x81 {
+                println!("[Dock] exit");
+                return;
+            }
+            // Left arrow (press)
+            if sc == 0x4B {
+                if sel > 0 { sel -= 1; }
+                let pixels = render_dock_with_apps(width as usize, height as usize, &apps, sel);
+                let _ = flush_window_shared(kagami_tid, window_id, width, height, &pixels);
+            }
+            // Right arrow (press)
+            if sc == 0x4D {
+                if sel + 1 < apps.len() { sel += 1; }
+                let pixels = render_dock_with_apps(width as usize, height as usize, &apps, sel);
+                let _ = flush_window_shared(kagami_tid, window_id, width, height, &pixels);
+            }
+            // Enter (press)
+            if sc == 0x1C {
+                if let Some((app, _icon)) = apps.get(sel) {
+                    let path = format!("/Applications/{}/entry.elf", app);
+                    match process::exec_with_args(&path, &[]) {
+                        Ok(pid) => println!("[Dock] launched {} pid={}", app, pid),
+                        Err(_) => eprintln!("[Dock] failed to launch {}", app),
+                    }
+                }
+            }
         }
         yield_now();
     }
@@ -235,23 +261,154 @@ fn blit_shared_surface(surface: &SharedSurface, pixels: &[u32]) {
     }
 }
 
-fn render_dock(width: usize, height: usize) -> Vec<u32> {
+fn read_file(path: &str, max_size: usize) -> Option<Vec<u8>> {
+    if max_size == 0 { return None; }
+    let fd = io::open(path, io::O_RDONLY);
+    if fd < 0 { return None; }
+    let mut out = Vec::new();
+    let mut buf = [0u8; 512];
+    while out.len() < max_size {
+        let read_len = core::cmp::min(buf.len(), max_size - out.len());
+        let n = io::read(fd as u64, &mut buf[..read_len]);
+        if (n as i64) < 0 { let _ = io::close(fd as u64); return None; }
+        let n = n as usize;
+        if n == 0 { break; }
+        out.extend_from_slice(&buf[..n]);
+    }
+    let _ = io::close(fd as u64);
+    if out.is_empty() { None } else { Some(out) }
+}
+
+/// Returns (bundle_name, optional icon absolute path)
+fn list_app_bundles() -> Vec<(String, Option<String>)> {
+    let fd = io::open("/Applications", io::O_RDONLY);
+    if fd < 0 {
+        return Vec::new();
+    }
+    let mut buf = [0u8; 4096];
+    let n = fs::readdir(fd as u64, &mut buf);
+    let _ = io::close(fd as u64);
+    if (n as i64) <= 0 {
+        return Vec::new();
+    }
+    let mut entries: Vec<(String, Option<String>)> = Vec::new();
+    for chunk in buf[..n as usize].split(|&b| b == b'\n') {
+        if chunk.is_empty() { continue; }
+        if let Ok(s) = core::str::from_utf8(chunk) {
+            if s.ends_with(".app") {
+                let bundle = s.to_string();
+                // check about.toml for icon field
+                let about_path = format!("/Applications/{}/about.toml", bundle);
+                let mut icon_path: Option<String> = None;
+                if let Some(data) = read_file(&about_path, 4096) {
+                    if let Ok(text) = core::str::from_utf8(&data) {
+                        for line in text.lines() {
+                            let line = line.trim();
+                            if line.starts_with("icon") {
+                                if let Some(pos) = line.find('=') {
+                                    let mut val = line[pos+1..].trim();
+                                    if val.starts_with('"') && val.ends_with('"') && val.len() >= 2 {
+                                        val = &val[1..val.len()-1];
+                                    }
+                                    if !val.is_empty() {
+                                        let candidate = format!("/Applications/{}/{}", bundle, val);
+                                        // existence check
+                                        if let Some(_) = read_file(&candidate, 1) {
+                                            icon_path = Some(candidate);
+                                        }
+                                    }
+                                }
+                            }
+                            if icon_path.is_some() { break; }
+                        }
+                    }
+                }
+                // fallback: check common icon files at bundle root
+                if icon_path.is_none() {
+                    for fname in ["icon.png", "icon.jpeg", "icon.jpg"] {
+                        let candidate = format!("/Applications/{}/{}", bundle, fname);
+                        if let Some(_) = read_file(&candidate, 1) {
+                            icon_path = Some(candidate);
+                            break;
+                        }
+                    }
+                }
+                entries.push((bundle, icon_path));
+            }
+        }
+    }
+    entries
+}
+
+fn render_dock_with_apps(width: usize, height: usize, apps: &Vec<(String, Option<String>)>, selected: usize) -> Vec<u32> {
     let mut px = vec![0u32; width * height];
-    let dock_w = 276i32;
+    let dock_w = (apps.len().saturating_mul(48).saturating_add(36)).min(width);
     let dock_h = 75i32;
-    let dock_x = ((width as i32 - dock_w) / 2).max(0);
+    let dock_x = ((width as i32 - dock_w as i32) / 2).max(0);
     let dock_y = (height as i32 - dock_h).max(0);
-    fill_rounded_rect(&mut px, width, dock_x, dock_y, dock_w, dock_h, 22, 0x4BF6_F8FC);
-    stroke_rounded_rect(&mut px, width, dock_x, dock_y, dock_w, dock_h, 22, 0x4BCD_D7E4);
+    fill_rounded_rect(&mut px, width, dock_x, dock_y, dock_w as i32, dock_h, 22, 0x4BF6_F8FC);
+    stroke_rounded_rect(&mut px, width, dock_x, dock_y, dock_w as i32, dock_h, 22, 0x4BCD_D7E4);
 
     let mut icon_x = dock_x + 18;
     let icon_y = dock_y + 18;
-    let icons = [0xFF60_A5FA, 0xFF4ADE80, 0xFFF59E0B, 0xFFFB7185, 0xFFA78BFA];
-    for c in icons {
-        fill_rounded_rect(&mut px, width, icon_x, icon_y, 40, 40, 14, c);
+    for (i, (name, icon_opt)) in apps.iter().enumerate() {
+        let color = if let Some(path) = icon_opt {
+            palette_from_icon_path(path)
+        } else {
+            palette_from_name(name)
+        };
+        let ix = icon_x;
+        let iy = icon_y;
+        fill_rounded_rect(&mut px, width, ix, iy, 40, 40, 14, color);
+        // selection highlight
+        if i == selected {
+            stroke_rounded_rect(&mut px, width, ix - 2, iy - 2, 44, 44, 16, 0xFF00_0000);
+        }
+        // draw first letter as simple label (white)
+        let label = name.trim_end_matches(".app");
+        if let Some(ch) = label.chars().next() {
+            draw_char_on_icon(&mut px, width, ix, iy, ch);
+        }
         icon_x += 48;
     }
     px
+}
+
+fn palette_from_icon_path(path: &str) -> u32 {
+    if let Some(data) = read_file(path, 4096) {
+        let mut h: u32 = 0;
+        for b in data.iter().take(256) {
+            h = h.wrapping_mul(131).wrapping_add(*b as u32);
+        }
+        let r = ((h >> 16) & 0xFF) as u32;
+        let g = ((h >> 8) & 0xFF) as u32;
+        let b = (h & 0xFF) as u32;
+        0xFF00_0000 | (r << 16) | (g << 8) | b
+    } else {
+        0xFF60_A5FA
+    }
+}
+
+fn palette_from_name(name: &str) -> u32 {
+    // simple hash to color
+    let mut h: u32 = 0;
+    for b in name.as_bytes() {
+        h = h.wrapping_mul(31).wrapping_add(*b as u32);
+    }
+    let r = ((h >> 16) & 0xFF) as u32;
+    let g = ((h >> 8) & 0xFF) as u32;
+    let b = (h & 0xFF) as u32;
+    0xFF00_0000 | (r << 16) | (g << 8) | b
+}
+
+fn draw_char_on_icon(px: &mut [u32], stride: usize, ix: i32, iy: i32, ch: char) {
+    // very small 6x8 font: render as a single pixel for now (center)
+    let cx = ix + 20;
+    let cy = iy + 12;
+    if cx >= 0 && cy >= 0 && (cx as usize) < stride && (cy as usize) < (px.len() / stride) {
+        let idx = (cy as usize) * stride + (cx as usize);
+        px[idx] = 0xFFFFFFFF;
+    }
 }
 
 fn fill_rounded_rect(
