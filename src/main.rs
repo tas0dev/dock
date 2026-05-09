@@ -8,7 +8,7 @@ use swiftlib::{
 
 const IPC_BUF_SIZE: usize = 4128;
 const KAGAMI_PROCESS_CANDIDATES: [&str; 3] =
-    ["/Applications/Kagami.app/entry.elf", "Kagami.app", "entry.elf"];
+    ["/applications/Kagami.app/entry.elf", "Kagami.app", "entry.elf"];
 
 const OP_REQ_CREATE_WINDOW: u32 = 1;
 const OP_RES_WINDOW_CREATED: u32 = 2;
@@ -79,7 +79,7 @@ fn main() {
             // Enter (press)
             if sc == 0x1C {
                 if let Some((app, _icon)) = apps.get(sel) {
-                    let path = format!("/Applications/{}/entry.elf", app);
+                    let path = format!("/applications/{}/entry.elf", app);
                     match process::exec_with_args(&path, &[]) {
                         Ok(pid) => println!("[Dock] launched {} pid={}", app, pid),
                         Err(_) => eprintln!("[Dock] failed to launch {}", app),
@@ -281,7 +281,7 @@ fn read_file(path: &str, max_size: usize) -> Option<Vec<u8>> {
 
 /// Returns (bundle_name, optional icon absolute path)
 fn list_app_bundles() -> Vec<(String, Option<String>)> {
-    let fd = io::open("/Applications", io::O_RDONLY);
+    let fd = io::open("/applications", io::O_RDONLY);
     if fd < 0 {
         return Vec::new();
     }
@@ -298,7 +298,7 @@ fn list_app_bundles() -> Vec<(String, Option<String>)> {
             if s.ends_with(".app") {
                 let bundle = s.to_string();
                 // check about.toml for icon field
-                let about_path = format!("/Applications/{}/about.toml", bundle);
+                let about_path = format!("/applications/{}/about.toml", bundle);
                 let mut icon_path: Option<String> = None;
                 if let Some(data) = read_file(&about_path, 4096) {
                     if let Ok(text) = core::str::from_utf8(&data) {
@@ -311,7 +311,7 @@ fn list_app_bundles() -> Vec<(String, Option<String>)> {
                                         val = &val[1..val.len()-1];
                                     }
                                     if !val.is_empty() {
-                                        let candidate = format!("/Applications/{}/{}", bundle, val);
+                                        let candidate = format!("/applications/{}/{}", bundle, val);
                                         // existence check
                                         if let Some(_) = read_file(&candidate, 1) {
                                             icon_path = Some(candidate);
@@ -326,7 +326,7 @@ fn list_app_bundles() -> Vec<(String, Option<String>)> {
                 // fallback: check common icon files at bundle root
                 if icon_path.is_none() {
                     for fname in ["icon.png", "icon.jpeg", "icon.jpg"] {
-                        let candidate = format!("/Applications/{}/{}", bundle, fname);
+                        let candidate = format!("/applications/{}/{}", bundle, fname);
                         if let Some(_) = read_file(&candidate, 1) {
                             icon_path = Some(candidate);
                             break;
