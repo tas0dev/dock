@@ -139,7 +139,8 @@ fn decode_image(data: &[u8]) -> Option<(Vec<u32>, u32, u32)> {
     use std::io::Cursor;
     
     let cursor = Cursor::new(data);
-    let reader = ImageReader::new(cursor).ok()?;
+    let reader = ImageReader::new(cursor);
+    let reader = reader.with_guessed_format().ok()?;
     let img = reader.decode().ok()?;
     let rgba = img.to_rgba8();
     let width = rgba.width();
@@ -244,7 +245,7 @@ fn palette_from_name(name: &str) -> u32 {
     0xFF00_0000 | (r << 16) | (g << 8) | b
 }
 
-fn draw_char_on_icon(px: &mut [u32], stride: usize, ix: i32, iy: i32, ch: char) {
+fn draw_char_on_icon(px: &mut [u32], stride: usize, ix: i32, iy: i32, _ch: char) {
     let cx = ix + 20;
     let cy = iy + 12;
     if cx >= 0 && cy >= 0 && (cx as usize) < stride && (cy as usize) < (px.len() / stride) {
@@ -290,7 +291,7 @@ fn stroke_rounded_rect(
     if w <= 2 || h <= 2 {
         return;
     }
-    let r = radius.max(0).min(w / 2).min(h / 2);
+    let _r = radius.max(0).min(w / 2).min(h / 2);
     for i in 0..w {
         blend_put(px, stride, x + i, y, color, 255);
         blend_put(px, stride, x + i, y + h - 1, color, 255);

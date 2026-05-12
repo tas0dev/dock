@@ -4,3 +4,4 @@ version = "0.1.0"
 developer = "tas0dev"
 entry = "entry.elf"
 description = "Dock app for mochiOS desktop"
+resources = []
