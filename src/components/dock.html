@@ -1,9 +1,8 @@
 <style>
-body {
+.dock-parent {
     display: flex;
     flex-direction: column;
     align-items: center;
-    background-color: #202020;
 }
 
 .dock {
@@ -20,6 +19,8 @@ body {
 }
 </style>
 
-<div class="dock">
-    <Children />
+<div class="dock-parent">
+    <div class="dock">
+        <Children />
+    </div>
 </div>
