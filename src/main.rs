@@ -29,7 +29,7 @@ fn main() {
     println!("[Dock] rendering...");
     let pixels = render_dock_component(&apps, sel, width as usize, height as usize);
     println!("[Dock] render done (pixels={})", pixels.len());
-    
+
     println!("[Dock] presenting...");
     if let Err(e) = window.present(&pixels) {
         eprintln!("[Dock] present failed: {}", e);
@@ -130,36 +130,34 @@ fn list_app_bundles() -> Vec<(String, Option<String>)> {
     
     match fs::open_via_fs(dir_path) {
         Ok(fd) => {
-            let mut buf = vec![0u8; 4096];
-            for _ in 0..4096 {
-                let n = fs::readdir(fd, &mut buf);
-                if n == 0 {
-                    break;
-                }
-                if n > 0xFFFF_FFFF_0000_0000 {
-                    break;
-                }
-                let n = n as usize;
-                if n > buf.len() {
-                    break;
-                }
-                
-                if n >= 2 {
-                    let name_len = u16::from_le_bytes([buf[0], buf[1]]) as usize;
-                    if name_len > 0 && name_len <= n - 2 {
-                        let name_bytes = &buf[2..2 + name_len];
-                        if let Ok(name_str) = String::from_utf8(name_bytes.to_vec()) {
-                            if name_str.ends_with(".app") {
-                                let app_path = format!("{}{}", dir_path, name_str);
-                                let about_toml_path = format!("{}/about.toml", app_path);
-                                let icon = read_icon_from_about_toml(&about_toml_path);
-                                apps.push((name_str, icon));
-                            }
-                        }
-                    }
-                }
-            }
+            let mut buf = vec![0u8; 16 * 1024];
+            let n = fs::readdir(fd, &mut buf);
+
             fs::close_via_fs(fd);
+
+            if n == 0 {
+                return apps;
+            }
+
+            if n > buf.len() as u64 {
+                return apps;
+            }
+
+            let text = match core::str::from_utf8(&buf[..n as usize]) {
+                Ok(t) => t,
+                Err(_) => return apps,
+            };
+            
+            for line in text.lines() {
+                let name_str = line.trim();
+                if name_str.is_empty() || !name_str.ends_with(".app") {
+                    continue;
+                }
+                let app_path = format!("{}{}", dir_path, name_str);
+                let about_toml_path = format!("{}/about.toml", app_path);
+                let icon = read_icon_from_about_toml(&about_toml_path);
+                apps.push((name_str.to_string(), icon));
+            }
         }
         Err(_) => {}
     }
