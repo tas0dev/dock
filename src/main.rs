@@ -8,8 +8,11 @@ use viewkit::{ipc_proto, Window};
 
 fn main() {
     println!("[Dock] start");
-    let width: u16 = 320;
-    let height: u16 = 100;
+    println!("[Dock] listing apps...");
+    let apps = list_app_bundles();
+
+    println!("[Dock] apps count={}", apps.len());
+    let (width, height) = dock_window_size(apps.len());
 
     let mut window = match Window::new(width, height, ipc_proto::LAYER_STATUS) {
         Ok(w) => w,
@@ -20,10 +23,6 @@ fn main() {
     };
     println!("[Dock] window ready id={}", window.id());
 
-    println!("[Dock] listing apps...");
-    let apps = list_app_bundles();
-
-    println!("[Dock] apps count={}", apps.len());
     let mut sel = 0usize;
 
     println!("[Dock] rendering...");
@@ -115,6 +114,19 @@ fn render_dock_component(
         .children(icons);
 
     viewkit::render_component_to_pixmap(&dock, width as u32, height as u32)
+}
+
+fn dock_window_size(app_count: usize) -> (u16, u16) {
+    let icon_width = 40usize;
+    let gap = 10usize;
+    let padding = 18usize;
+    let content_width = if app_count == 0 {
+        0
+    } else {
+        app_count * icon_width + app_count.saturating_sub(1) * gap
+    };
+    let width = content_width + padding * 2;
+    (width.max(120).min(u16::MAX as usize) as u16, 75)
 }
 
 fn read_file(path: &str, max_size: usize) -> Option<Vec<u8>> {
